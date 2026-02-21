@@ -35,6 +35,9 @@ class VideoDownloaderGUI:
         # 配置管理器
         self.config = ConfigManager()
         
+        # 版本管理器
+        self.version_manager = VersionManager()
+        
         # 消息队列（用于线程间通信）
         self.log_queue = queue.Queue()
         

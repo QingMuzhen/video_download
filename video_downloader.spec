@@ -25,6 +25,13 @@ hiddenimports = [
     'certifi',
     'charset_normalizer',
     'idna',
+    'packaging',
+    'packaging.version',
+    'tkinter',
+    'tkinter.ttk',
+    'tkinter.scrolledtext',
+    'tkinter.messagebox',
+    'tkinter.filedialog',
 ]
 
 a = Analysis(
@@ -43,18 +50,18 @@ a = Analysis(
     noarchive=False,
 )
 
-pyi_splash = Splash(
-    'splash.png',
-    binaries=a.binaries,
-    datas=a.datas,
-    text_pos=(10, 50),
-    text_size=12,
-    text_color='white',
-    minify_script=True,
-    always_on_top=True,
-)
+# pyi_splash = Splash(
+#     'splash.png',
+#     binaries=a.binaries,
+#     datas=a.datas,
+#     text_pos=(10, 50),
+#     text_size=12,
+#     text_color='white',
+#     minify_script=True,
+#     always_on_top=True,
+# )
 
-pyi_splash = None  # 如果没有splash.png，注释掉上面的Splash部分
+pyi_splash = None  # 没有splash.png，已注释掉Splash部分
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -80,5 +87,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='icon.ico',  # 如果有图标文件
+    # icon='icon.ico',  # 如果有图标文件，取消注释
 )

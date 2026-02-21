@@ -29,7 +29,7 @@ echo [3/3] 开始打包...
 echo 这可能需要几分钟时间，请耐心等待...
 echo.
 
-pyinstaller --clean video_downloader.spec
+python -m PyInstaller --clean video_downloader.spec
 
 if errorlevel 1 (
     echo.
