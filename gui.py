@@ -6,21 +6,38 @@ import threading
 import queue
 import os
 import sys
+import webbrowser
+import subprocess
 from pathlib import Path
 
 # 导入核心模块
-from utils import (
-    setup_logger,
-    VideoParser,
-    VideoDownloader,
-    NetworkCapture,
-    StreamDownloader,
-    MediaMerger,
-    SmartDetector,
-    EncryptedVideoHandler,
-    ConfigManager
-)
-from utils.version import VersionManager
+try:
+    from utils import (
+        setup_logger,
+        VideoParser,
+        VideoDownloader,
+        NetworkCapture,
+        StreamDownloader,
+        MediaMerger,
+        SmartDetector,
+        EncryptedVideoHandler,
+        ConfigManager,
+        ResourceDownloader,
+        ResourceDetector
+    )
+    from utils.version import VersionManager
+except ImportError as e:
+    # 如果导入失败，启动web界面
+    print(f"导入模块失败: {e}")
+    print("正在启动Web界面...")
+    try:
+        # 尝试启动API服务器
+        subprocess.Popen([sys.executable, "api_server.py"])
+        # 打开浏览器
+        webbrowser.open("http://localhost:5000")
+    except Exception as web_error:
+        print(f"启动Web界面失败: {web_error}")
+    sys.exit(1)
 
 
 class VideoDownloaderGUI:
@@ -29,7 +46,7 @@ class VideoDownloaderGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("视频爬虫工具 v4.0")
-        self.root.geometry("900x950")
+        self.root.geometry("900x810")
         self.root.resizable(True, True)
         
         # 配置管理器
@@ -59,7 +76,7 @@ class VideoDownloaderGUI:
         
         # 主容器
         main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame.grid(row=0, column=0, sticky="nsew")
         
         # 配置网格权重
         self.root.columnconfigure(0, weight=1)
@@ -69,26 +86,26 @@ class VideoDownloaderGUI:
         
         # ===== URL输入区域 =====
         url_frame = ttk.LabelFrame(main_frame, text="视频URL", padding="10")
-        url_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        url_frame.grid(row=0, column=0, sticky="we", pady=(0, 10))
         url_frame.columnconfigure(0, weight=1)
         
         self.url_var = tk.StringVar()
         url_entry = ttk.Entry(url_frame, textvariable=self.url_var, font=("Arial", 10))
-        url_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        url_entry.grid(row=0, column=0, sticky="we", padx=(0, 5))
         
         paste_btn = ttk.Button(url_frame, text="粘贴", command=self.paste_url, width=8)
         paste_btn.grid(row=0, column=1)
         
         # ===== 基本设置 =====
         basic_frame = ttk.LabelFrame(main_frame, text="基本设置", padding="10")
-        basic_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        basic_frame.grid(row=1, column=0, sticky="we", pady=(0, 10))
         basic_frame.columnconfigure(1, weight=1)
         
         # 保存目录
         ttk.Label(basic_frame, text="保存目录:").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.output_var = tk.StringVar(value="downloads")
         output_entry = ttk.Entry(basic_frame, textvariable=self.output_var)
-        output_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        output_entry.grid(row=0, column=1, sticky="we", padx=5)
         ttk.Button(basic_frame, text="浏览", command=self.browse_output, width=8).grid(row=0, column=2)
         
         # 最大下载数
@@ -104,12 +121,12 @@ class VideoDownloaderGUI:
         # 关键词
         ttk.Label(basic_frame, text="搜索关键词:").grid(row=3, column=0, sticky=tk.W, pady=5)
         self.keywords_var = tk.StringVar(value="")
-        ttk.Entry(basic_frame, textvariable=self.keywords_var).grid(row=3, column=1, sticky=(tk.W, tk.E), padx=5)
+        ttk.Entry(basic_frame, textvariable=self.keywords_var).grid(row=3, column=1, sticky="we", padx=5)
         ttk.Label(basic_frame, text="(逗号分隔)", font=("Arial", 8)).grid(row=3, column=2, sticky=tk.W)
         
         # ===== 高级选项 =====
         advanced_frame = ttk.LabelFrame(main_frame, text="高级选项", padding="10")
-        advanced_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        advanced_frame.grid(row=2, column=0, sticky="we", pady=(0, 10))
         
         # 选项复选框
         self.force_capture_var = tk.BooleanVar(value=False)
@@ -129,13 +146,13 @@ class VideoDownloaderGUI:
         
         # 代理设置
         proxy_frame = ttk.Frame(advanced_frame)
-        proxy_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
+        proxy_frame.grid(row=3, column=0, columnspan=2, sticky="we", pady=(5, 0))
         
         self.use_proxy_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(proxy_frame, text="使用代理:", variable=self.use_proxy_var).grid(row=0, column=0, sticky=tk.W)
         
         self.proxy_var = tk.StringVar(value="")
-        ttk.Entry(proxy_frame, textvariable=self.proxy_var, width=40).grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        ttk.Entry(proxy_frame, textvariable=self.proxy_var, width=40).grid(row=0, column=1, sticky="we", padx=5)
         proxy_frame.columnconfigure(1, weight=1)
         
         # ===== 控制按钮 =====
@@ -154,24 +171,24 @@ class VideoDownloaderGUI:
         
         # ===== 进度条 =====
         progress_frame = ttk.Frame(main_frame)
-        progress_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        progress_frame.grid(row=4, column=0, sticky="we", pady=(0, 10))
         progress_frame.columnconfigure(0, weight=1)
         
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100)
-        self.progress_bar.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        self.progress_bar.grid(row=0, column=0, sticky="we")
         
         self.status_var = tk.StringVar(value="就绪")
         ttk.Label(progress_frame, textvariable=self.status_var, font=("Arial", 9)).grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
         
         # ===== 日志区域 =====
         log_frame = ttk.LabelFrame(main_frame, text="运行日志", padding="5")
-        log_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        log_frame.grid(row=5, column=0, sticky="nsew", pady=(0, 10))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD, font=("Consolas", 9))
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.log_text.grid(row=0, column=0, sticky="nsew")
         
         # 配置日志颜色标签
         self.log_text.tag_config("INFO", foreground="black")
@@ -181,7 +198,7 @@ class VideoDownloaderGUI:
         
         # ===== 底部信息栏 =====
         info_frame = ttk.Frame(main_frame)
-        info_frame.grid(row=6, column=0, sticky=(tk.W, tk.E))
+        info_frame.grid(row=6, column=0, sticky="we")
         
         current_version = self.version_manager.get_current_version()
         ttk.Label(info_frame, text=f"视频爬虫工具 v{current_version} | 支持智能检测、网络抓包、加密解密",
@@ -194,16 +211,18 @@ class VideoDownloaderGUI:
     def load_config(self):
         """从配置文件加载设置"""
         try:
-            self.output_var.set(self.config.get('download', 'output_dir', 'downloads'))
+            output_dir = self.config.get('download', 'output_dir', 'downloads')
+            self.output_var.set(output_dir or 'downloads')
             self.max_downloads_var.set(str(self.config.getint('download', 'max_downloads', 10)))
             self.workers_var.set(str(self.config.getint('download', 'workers', 3)))
-            self.keywords_var.set(self.config.get('capture', 'keywords', ''))
+            keywords = self.config.get('capture', 'keywords', '')
+            self.keywords_var.set(keywords or '')
             self.headless_var.set(self.config.getboolean('capture', 'headless', True))
             
             if self.config.getboolean('proxy', 'enabled', False):
                 self.use_proxy_var.set(True)
                 proxy = self.config.get('proxy', 'http_proxy', '')
-                self.proxy_var.set(proxy)
+                self.proxy_var.set(proxy or '')
             
             self.log_message("已加载配置文件", "SUCCESS")
         except Exception as e:
@@ -363,9 +382,17 @@ class VideoDownloaderGUI:
                 self.update_status("正在解析HTML...", 20)
                 self.log_message("尝试HTML解析模式", "INFO")
                 
-                parser = VideoParser(logger=logger)
-                video_urls = parser.parse(url, proxy=proxy)
-                self.log_message(f"HTML解析完成，找到 {len(video_urls)} 个视频", "SUCCESS")
+                # 注意：VideoParser.parse需要html_content和base_url参数
+                # 这里需要先获取HTML内容
+                try:
+                    import requests
+                    response = requests.get(url, timeout=30)
+                    html_content = response.text
+                    parser = VideoParser(logger=logger)
+                    video_urls = parser.parse(html_content, url)
+                    self.log_message(f"HTML解析完成，找到 {len(video_urls)} 个视频", "SUCCESS")
+                except Exception as parse_error:
+                    self.log_message(f"HTML解析失败: {parse_error}", "WARNING")
             
             if not video_urls:
                 self.log_message("未找到任何视频链接", "ERROR")
@@ -404,7 +431,7 @@ class VideoDownloaderGUI:
                 self.log_message("检查并解密加密视频...", "INFO")
                 
                 handler = EncryptedVideoHandler(logger=logger)
-                decrypted = handler.process_directory(output_dir)
+                decrypted = handler.batch_process_directory(output_dir)
                 if decrypted:
                     self.log_message(f"解密了 {len(decrypted)} 个加密视频", "SUCCESS")
             
@@ -504,35 +531,66 @@ class VideoDownloaderGUI:
 
 def main():
     """主函数"""
-    root = tk.Tk()
-    app = VideoDownloaderGUI(root)
-    
-    # 设置窗口图标（如果有的话）
     try:
-        if hasattr(sys, '_MEIPASS'):
-            # PyInstaller打包后的路径
-            icon_path = os.path.join(sys._MEIPASS, 'icon.ico')
-        else:
-            icon_path = 'icon.ico'
+        root = tk.Tk()
+        app = VideoDownloaderGUI(root)
         
-        if os.path.exists(icon_path):
-            root.iconbitmap(icon_path)
-    except:
-        pass
-    
-    # 设置窗口关闭事件
-    def on_closing():
-        if app.is_downloading:
-            if messagebox.askokcancel("退出", "正在下载中，确定要退出吗？"):
-                app.is_downloading = False
+        # 设置窗口图标（如果有的话）
+        try:
+            if hasattr(sys, '_MEIPASS'):
+                # PyInstaller打包后的路径
+                icon_path = os.path.join(getattr(sys, '_MEIPASS'), 'icon.ico')
+            else:
+                icon_path = 'icon.ico'
+            
+            if os.path.exists(icon_path):
+                root.iconbitmap(icon_path)
+        except:
+            pass
+        
+        # 设置窗口关闭事件
+        def on_closing():
+            if app.is_downloading:
+                if messagebox.askokcancel("退出", "正在下载中，确定要退出吗？"):
+                    app.is_downloading = False
+                    root.destroy()
+            else:
                 root.destroy()
-        else:
-            root.destroy()
+        
+        root.protocol("WM_DELETE_WINDOW", on_closing)
+        
+        # 启动主循环
+        root.mainloop()
     
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-    
-    # 启动主循环
-    root.mainloop()
+    except Exception as e:
+        print(f"GUI启动失败: {e}")
+        print("正在启动Web界面作为备用方案...")
+        
+        # 显示错误对话框（如果可能）
+        try:
+            messagebox.showerror(
+                "启动失败",
+                f"GUI界面启动失败:\n{e}\n\n正在启动Web界面..."
+            )
+        except:
+            pass
+        
+        # 启动Web界面
+        try:
+            # 启动API服务器
+            subprocess.Popen([sys.executable, "api_server.py"],
+                           creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == 'win32' else 0)
+            
+            # 等待服务器启动
+            import time
+            time.sleep(2)
+            
+            # 打开浏览器
+            webbrowser.open("http://localhost:5000")
+            print("Web界面已启动: http://localhost:5000")
+        except Exception as web_error:
+            print(f"启动Web界面失败: {web_error}")
+            print("请手动运行: python api_server.py")
 
 
 if __name__ == '__main__':

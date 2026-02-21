@@ -2,12 +2,25 @@
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 tqdm>=4.66.0
+lxml>=4.9.0
 
 # 网络抓包（可选但推荐）
 selenium>=4.15.0
+
+# Web API服务器
+flask>=3.0.0
+flask-cors>=4.0.0
 
 # 版本管理
 packaging>=23.0
 
 # GUI 和打包
 pyinstaller>=6.0.0
+
+# 流媒体下载
+m3u8>=3.5.0
+
+# 可选依赖（根据需要安装）
+ffmpeg-python>=0.2.0  # 音视频处理
+pillow>=10.0.0        # 图片处理
+pycryptodome>=3.19.0  # 加密视频解密
