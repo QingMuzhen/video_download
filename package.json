@@ -1,0 +1,18 @@
+{
+  "name": "video-slider-helper",
+  "version": "1.0.0",
+  "description": "Node.js helper scripts for video slider",
+  "main": "index.js",
+  "scripts": {
+    "decrypt": "node scripts/decrypt.js",
+    "analyze": "node scripts/analyze.js"
+  },
+  "keywords": ["video", "downloader", "scraper"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12",
+    "puppeteer": "^21.0.0"
+  }
+}
