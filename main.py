@@ -1,527 +1,597 @@
-"""视频爬虫工具 - 主程序（智能自动模式）"""
+"""视频爬虫工具 - GUI界面"""
 
-import argparse
-import sys
+import tkinter as tk
+from tkinter import ttk, filedialog, scrolledtext, messagebox
+import threading
+import queue
 import os
-import requests
-from utils import (
-    setup_logger,
-    VideoParser,
-    VideoDownloader,
-    NetworkCapture,
-    MediaMerger,
-    StreamDownloader,
-    SmartDetector,
-    EncryptedVideoHandler
-)
+import sys
+import webbrowser
+import subprocess
+from pathlib import Path
 
-
-def get_html_content(url, proxy=None, logger=None):
-    """
-    获取网页HTML内容
-    
-    Args:
-        url: 目标URL
-        proxy: 代理服务器地址
-        logger: 日志记录器
-    
-    Returns:
-        str: HTML内容，失败返回None
-    """
+# 导入核心模块
+try:
+    from utils import (
+        setup_logger,
+        VideoParser,
+        VideoDownloader,
+        NetworkCapture,
+        StreamDownloader,
+        MediaMerger,
+        SmartDetector,
+        EncryptedVideoHandler,
+        ConfigManager,
+        ResourceDownloader,
+        ResourceDetector
+    )
+    from utils.version import VersionManager
+except ImportError as e:
+    # 如果导入失败，启动web界面
+    print(f"导入模块失败: {e}")
+    print("正在启动Web界面...")
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        proxies = {'http': proxy, 'https': proxy} if proxy else None
-        
-        if logger:
-            logger.info(f"正在获取网页内容: {url}")
-        
-        response = requests.get(url, headers=headers, timeout=30, proxies=proxies)
-        response.raise_for_status()
-        
-        if logger:
-            logger.info(f"成功获取网页内容，大小: {len(response.text)} 字节")
-        
-        return response.text
+        # 尝试启动API服务器
+        subprocess.Popen([sys.executable, "api_server.py"])
+        # 打开浏览器
+        webbrowser.open("http://localhost:5000")
+    except Exception as web_error:
+        print(f"启动Web界面失败: {web_error}")
+    sys.exit(1)
+
+
+class VideoDownloaderGUI:
+    """视频下载器GUI主窗口"""
     
-    except requests.exceptions.RequestException as e:
-        if logger:
-            logger.error(f"获取网页内容失败: {e}")
+    def __init__(self, root):
+        self.root = root
+        self.root.title("视频爬虫工具 v4.0")
+        self.root.geometry("900x810")
+        self.root.resizable(True, True)
+        
+        # 配置管理器
+        self.config = ConfigManager()
+        
+        # 版本管理器
+        self.version_manager = VersionManager()
+        
+        # 消息队列（用于线程间通信）
+        self.log_queue = queue.Queue()
+        
+        # 下载状态
+        self.is_downloading = False
+        self.download_thread = None
+        
+        # 创建界面
+        self.create_widgets()
+        
+        # 启动日志更新
+        self.update_log()
+        
+        # 加载配置
+        self.load_config()
+    
+    def create_widgets(self):
+        """创建界面组件"""
+        
+        # 主容器
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        
+        # 配置网格权重
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(6, weight=1)
+        
+        # ===== URL输入区域 =====
+        url_frame = ttk.LabelFrame(main_frame, text="视频URL", padding="10")
+        url_frame.grid(row=0, column=0, sticky="we", pady=(0, 10))
+        url_frame.columnconfigure(0, weight=1)
+        
+        self.url_var = tk.StringVar()
+        url_entry = ttk.Entry(url_frame, textvariable=self.url_var, font=("Arial", 10))
+        url_entry.grid(row=0, column=0, sticky="we", padx=(0, 5))
+        
+        paste_btn = ttk.Button(url_frame, text="粘贴", command=self.paste_url, width=8)
+        paste_btn.grid(row=0, column=1)
+        
+        # ===== 基本设置 =====
+        basic_frame = ttk.LabelFrame(main_frame, text="基本设置", padding="10")
+        basic_frame.grid(row=1, column=0, sticky="we", pady=(0, 10))
+        basic_frame.columnconfigure(1, weight=1)
+        
+        # 保存目录
+        ttk.Label(basic_frame, text="保存目录:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.output_var = tk.StringVar(value="downloads")
+        output_entry = ttk.Entry(basic_frame, textvariable=self.output_var)
+        output_entry.grid(row=0, column=1, sticky="we", padx=5)
+        ttk.Button(basic_frame, text="浏览", command=self.browse_output, width=8).grid(row=0, column=2)
+        
+        # 最大下载数
+        ttk.Label(basic_frame, text="最大下载数:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.max_downloads_var = tk.StringVar(value="10")
+        ttk.Entry(basic_frame, textvariable=self.max_downloads_var, width=10).grid(row=1, column=1, sticky=tk.W, padx=5)
+        
+        # 并发线程数
+        ttk.Label(basic_frame, text="并发线程:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.workers_var = tk.StringVar(value="3")
+        ttk.Entry(basic_frame, textvariable=self.workers_var, width=10).grid(row=2, column=1, sticky=tk.W, padx=5)
+        
+        # 关键词
+        ttk.Label(basic_frame, text="搜索关键词:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.keywords_var = tk.StringVar(value="")
+        ttk.Entry(basic_frame, textvariable=self.keywords_var).grid(row=3, column=1, sticky="we", padx=5)
+        ttk.Label(basic_frame, text="(逗号分隔)", font=("Arial", 8)).grid(row=3, column=2, sticky=tk.W)
+        
+        # ===== 高级选项 =====
+        advanced_frame = ttk.LabelFrame(main_frame, text="高级选项", padding="10")
+        advanced_frame.grid(row=2, column=0, sticky="we", pady=(0, 10))
+        
+        # 选项复选框
+        self.force_capture_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(advanced_frame, text="强制使用抓包模式", variable=self.force_capture_var).grid(row=0, column=0, sticky=tk.W, padx=5)
+        
+        self.resume_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(advanced_frame, text="启用断点续传", variable=self.resume_var).grid(row=0, column=1, sticky=tk.W, padx=5)
+        
+        self.auto_merge_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(advanced_frame, text="自动合并音视频", variable=self.auto_merge_var).grid(row=1, column=0, sticky=tk.W, padx=5)
+        
+        self.auto_decrypt_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(advanced_frame, text="自动解密视频", variable=self.auto_decrypt_var).grid(row=1, column=1, sticky=tk.W, padx=5)
+        
+        self.headless_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(advanced_frame, text="无头浏览器模式", variable=self.headless_var).grid(row=2, column=0, sticky=tk.W, padx=5)
+        
+        # 代理设置
+        proxy_frame = ttk.Frame(advanced_frame)
+        proxy_frame.grid(row=3, column=0, columnspan=2, sticky="we", pady=(5, 0))
+        
+        self.use_proxy_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(proxy_frame, text="使用代理:", variable=self.use_proxy_var).grid(row=0, column=0, sticky=tk.W)
+        
+        self.proxy_var = tk.StringVar(value="")
+        ttk.Entry(proxy_frame, textvariable=self.proxy_var, width=40).grid(row=0, column=1, sticky="we", padx=5)
+        proxy_frame.columnconfigure(1, weight=1)
+        
+        # ===== 控制按钮 =====
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=3, column=0, pady=10)
+        
+        self.start_btn = ttk.Button(button_frame, text="开始下载", command=self.start_download, width=15)
+        self.start_btn.grid(row=0, column=0, padx=5)
+        
+        self.stop_btn = ttk.Button(button_frame, text="停止下载", command=self.stop_download, width=15, state=tk.DISABLED)
+        self.stop_btn.grid(row=0, column=1, padx=5)
+        
+        ttk.Button(button_frame, text="清空日志", command=self.clear_log, width=15).grid(row=0, column=2, padx=5)
+        
+        ttk.Button(button_frame, text="打开下载目录", command=self.open_output_dir, width=15).grid(row=0, column=3, padx=5)
+        
+        # ===== 进度条 =====
+        progress_frame = ttk.Frame(main_frame)
+        progress_frame.grid(row=4, column=0, sticky="we", pady=(0, 10))
+        progress_frame.columnconfigure(0, weight=1)
+        
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100)
+        self.progress_bar.grid(row=0, column=0, sticky="we")
+        
+        self.status_var = tk.StringVar(value="就绪")
+        ttk.Label(progress_frame, textvariable=self.status_var, font=("Arial", 9)).grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        
+        # ===== 日志区域 =====
+        log_frame = ttk.LabelFrame(main_frame, text="运行日志", padding="5")
+        log_frame.grid(row=5, column=0, sticky="nsew", pady=(0, 10))
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD, font=("Consolas", 9))
+        self.log_text.grid(row=0, column=0, sticky="nsew")
+        
+        # 配置日志颜色标签
+        self.log_text.tag_config("INFO", foreground="black")
+        self.log_text.tag_config("SUCCESS", foreground="green")
+        self.log_text.tag_config("WARNING", foreground="orange")
+        self.log_text.tag_config("ERROR", foreground="red")
+        
+        # ===== 底部信息栏 =====
+        info_frame = ttk.Frame(main_frame)
+        info_frame.grid(row=6, column=0, sticky="we")
+        
+        current_version = self.version_manager.get_current_version()
+        ttk.Label(info_frame, text=f"视频爬虫工具 v{current_version} | 支持智能检测、网络抓包、加密解密",
+                 font=("Arial", 8), foreground="gray").grid(row=0, column=0, sticky=tk.W)
+        
+        # 检查更新按钮
+        ttk.Button(info_frame, text="检查更新", command=self.check_for_updates, width=10).grid(row=0, column=1, sticky=tk.E, padx=5)
+        info_frame.columnconfigure(0, weight=1)
+    
+    def load_config(self):
+        """从配置文件加载设置"""
+        try:
+            output_dir = self.config.get('download', 'output_dir', 'downloads')
+            self.output_var.set(output_dir or 'downloads')
+            self.max_downloads_var.set(str(self.config.getint('download', 'max_downloads', 10)))
+            self.workers_var.set(str(self.config.getint('download', 'workers', 3)))
+            keywords = self.config.get('capture', 'keywords', '')
+            self.keywords_var.set(keywords or '')
+            self.headless_var.set(self.config.getboolean('capture', 'headless', True))
+            
+            if self.config.getboolean('proxy', 'enabled', False):
+                self.use_proxy_var.set(True)
+                proxy = self.config.get('proxy', 'http_proxy', '')
+                self.proxy_var.set(proxy or '')
+            
+            self.log_message("已加载配置文件", "SUCCESS")
+        except Exception as e:
+            self.log_message(f"加载配置失败: {e}", "WARNING")
+    
+    def paste_url(self):
+        """粘贴URL"""
+        try:
+            url = self.root.clipboard_get()
+            self.url_var.set(url)
+            self.log_message("已粘贴URL", "INFO")
+        except:
+            messagebox.showwarning("警告", "剪贴板为空或无法访问")
+    
+    def browse_output(self):
+        """浏览选择输出目录"""
+        directory = filedialog.askdirectory(initialdir=self.output_var.get())
+        if directory:
+            self.output_var.set(directory)
+    
+    def open_output_dir(self):
+        """打开下载目录"""
+        output_dir = self.output_var.get()
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        # 跨平台打开文件夹
+        if sys.platform == 'win32':
+            os.startfile(output_dir)
+        elif sys.platform == 'darwin':
+            os.system(f'open "{output_dir}"')
         else:
-            print(f"获取网页内容失败: {e}")
-        return None
-    except Exception as e:
-        if logger:
-            logger.error(f"未知错误: {e}")
-        else:
-            print(f"未知错误: {e}")
-        return None
-
-
-def check_dependencies():
-    """检查必要的依赖是否已安装"""
-    missing_deps = []
+            os.system(f'xdg-open "{output_dir}"')
     
-    try:
-        import requests
-    except ImportError:
-        missing_deps.append('requests')
+    def log_message(self, message, level="INFO"):
+        """添加日志消息到队列"""
+        self.log_queue.put((message, level))
     
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError:
-        missing_deps.append('beautifulsoup4')
+    def update_log(self):
+        """更新日志显示"""
+        try:
+            while True:
+                message, level = self.log_queue.get_nowait()
+                self.log_text.insert(tk.END, f"[{level}] {message}\n", level)
+                self.log_text.see(tk.END)
+        except queue.Empty:
+            pass
+        
+        # 每100ms检查一次
+        self.root.after(100, self.update_log)
     
-    try:
-        import tqdm
-    except ImportError:
-        missing_deps.append('tqdm')
+    def clear_log(self):
+        """清空日志"""
+        self.log_text.delete(1.0, tk.END)
+        self.log_message("日志已清空", "INFO")
     
-    if missing_deps:
-        print("错误: 缺少必要的依赖库")
-        print(f"缺失依赖: {', '.join(missing_deps)}")
-        print("\n请运行以下命令安装依赖:")
-        print("  pip install -r requirements.txt")
-        print("\n或者手动安装:")
-        print(f"  pip install {' '.join(missing_deps)}")
-        return False
+    def update_status(self, status, progress=None):
+        """更新状态和进度"""
+        self.status_var.set(status)
+        if progress is not None:
+            self.progress_var.set(progress)
     
-    return True
-
-
-def check_optional_dependencies():
-    """检查可选依赖"""
-    optional_deps = {}
+    def start_download(self):
+        """开始下载"""
+        url = self.url_var.get().strip()
+        if not url:
+            messagebox.showwarning("警告", "请输入视频URL")
+            return
+        
+        if self.is_downloading:
+            messagebox.showwarning("警告", "正在下载中，请等待完成")
+            return
+        
+        # 验证参数
+        try:
+            max_downloads = int(self.max_downloads_var.get())
+            workers = int(self.workers_var.get())
+            if max_downloads <= 0 or workers <= 0:
+                raise ValueError()
+        except:
+            messagebox.showerror("错误", "最大下载数和并发线程数必须是正整数")
+            return
+        
+        # 更新UI状态
+        self.is_downloading = True
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.progress_var.set(0)
+        
+        # 启动下载线程
+        self.download_thread = threading.Thread(target=self.download_worker, args=(url,), daemon=True)
+        self.download_thread.start()
     
-    try:
-        import selenium
-        optional_deps['selenium'] = True
-    except ImportError:
-        optional_deps['selenium'] = False
+    def stop_download(self):
+        """停止下载"""
+        if self.is_downloading:
+            self.is_downloading = False
+            self.log_message("正在停止下载...", "WARNING")
+            self.update_status("正在停止...")
     
-    return optional_deps
-
-
-def parse_arguments():
-    """解析命令行参数"""
-    parser = argparse.ArgumentParser(
-        description='视频爬虫工具 - 智能自动检测模式',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用示例:
-  # 自动模式（推荐）- 程序会自动检测并选择最佳策略
-  %(prog)s https://example.com/videos
-  
-  # 指定输出目录和下载数量
-  %(prog)s https://example.com/videos -o ./my_videos -m 20
-  
-  # 使用代理
-  %(prog)s https://example.com/videos --proxy http://127.0.0.1:7890
-  
-  # 手动指定模式（高级用户）
-  %(prog)s https://example.com/videos --force-capture
-  %(prog)s https://example.com/playlist.m3u8 --force-hls
-        """
-    )
+    def download_worker(self, url):
+        """下载工作线程"""
+        try:
+            self.log_message("="*50, "INFO")
+            self.log_message(f"开始处理: {url}", "INFO")
+            self.update_status("正在分析URL...", 0)
+            
+            # 获取参数
+            output_dir = self.output_var.get()
+            max_downloads = int(self.max_downloads_var.get())
+            workers = int(self.workers_var.get())
+            keywords = [k.strip() for k in self.keywords_var.get().split(',') if k.strip()]
+            proxy = self.proxy_var.get() if self.use_proxy_var.get() else None
+            
+            # 创建输出目录
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # 设置日志
+            logger = setup_logger(log_dir='logs')
+            
+            # 智能检测
+            self.log_message("正在智能检测URL类型...", "INFO")
+            detector = SmartDetector(logger=logger)
+            url_type = detector.detect_url_type(url)
+            self.log_message(f"检测到URL类型: {url_type}", "SUCCESS")
+            
+            strategy = detector.recommend_strategy(url)
+            self.log_message(f"推荐策略: {strategy['method']}", "INFO")
+            
+            video_urls = []
+            cookies = None
+            referer = None
+            
+            # 根据策略下载
+            if strategy['use_capture'] or self.force_capture_var.get():
+                self.update_status("正在启动浏览器抓包...", 10)
+                self.log_message("启动浏览器抓包模式", "INFO")
+                
+                capture = NetworkCapture(headless=self.headless_var.get(), logger=logger)
+                try:
+                    video_urls = capture.start_capture(url, wait_time=10)
+                    cookies = capture.get_cookies()
+                    referer = capture.get_referer()
+                    
+                    if keywords:
+                        self.log_message(f"使用关键词过滤: {', '.join(keywords)}", "INFO")
+                        filtered = capture.filter_video_requests(keywords=keywords)
+                        if filtered:
+                            video_urls = [req['url'] for req in filtered[:max_downloads]]
+                    
+                    self.log_message(f"抓包完成，找到 {len(video_urls)} 个视频", "SUCCESS")
+                except Exception as e:
+                    self.log_message(f"抓包失败: {e}", "ERROR")
+            
+            # 如果没有找到视频，尝试HTML解析
+            if not video_urls:
+                self.update_status("正在解析HTML...", 20)
+                self.log_message("尝试HTML解析模式", "INFO")
+                
+                # 注意：VideoParser.parse需要html_content和base_url参数
+                # 这里需要先获取HTML内容
+                try:
+                    import requests
+                    response = requests.get(url, timeout=30)
+                    html_content = response.text
+                    parser = VideoParser(logger=logger)
+                    video_urls = parser.parse(html_content, url)
+                    self.log_message(f"HTML解析完成，找到 {len(video_urls)} 个视频", "SUCCESS")
+                except Exception as parse_error:
+                    self.log_message(f"HTML解析失败: {parse_error}", "WARNING")
+            
+            if not video_urls:
+                self.log_message("未找到任何视频链接", "ERROR")
+                self.update_status("未找到视频", 0)
+                messagebox.showerror("错误", "未找到任何视频链接")
+                return
+            
+            # 限制下载数量
+            video_urls = video_urls[:max_downloads]
+            self.log_message(f"准备下载 {len(video_urls)} 个视频", "INFO")
+            
+            # 下载视频
+            self.update_status(f"正在下载 {len(video_urls)} 个视频...", 30)
+            self.log_message(f"准备下载 {len(video_urls)} 个视频", "INFO")
+            
+            downloader = VideoDownloader(
+                output_dir=output_dir,
+                workers=workers,
+                resume=self.resume_var.get(),
+                proxy=proxy,
+                logger=logger,
+                cookies=cookies,
+                referer=referer
+            )
+            
+            try:
+                downloaded_files = downloader.download_videos(video_urls)
+                self.log_message(f"下载完成，成功 {len(downloaded_files)} 个文件", "SUCCESS")
+            except Exception as e:
+                self.log_message(f"下载过程出错: {e}", "ERROR")
+                downloaded_files = []
+            
+            # 处理加密视频
+            if self.auto_decrypt_var.get() and downloaded_files:
+                self.update_status("正在处理加密视频...", 85)
+                self.log_message("检查并解密加密视频...", "INFO")
+                
+                handler = EncryptedVideoHandler(logger=logger)
+                decrypted = handler.batch_process_directory(output_dir)
+                if decrypted:
+                    self.log_message(f"解密了 {len(decrypted)} 个加密视频", "SUCCESS")
+            
+            # 完成
+            self.update_status(f"下载完成！共 {len(downloaded_files)} 个文件", 100)
+            self.log_message("="*50, "INFO")
+            self.log_message(f"全部完成！成功下载 {len(downloaded_files)} 个视频", "SUCCESS")
+            self.log_message(f"保存位置: {os.path.abspath(output_dir)}", "INFO")
+            
+            messagebox.showinfo("完成", f"下载完成！\n成功: {len(downloaded_files)} 个视频\n保存位置: {os.path.abspath(output_dir)}")
+            
+        except Exception as e:
+            self.log_message(f"发生错误: {e}", "ERROR")
+            self.update_status("下载失败", 0)
+            messagebox.showerror("错误", f"下载过程中发生错误:\n{e}")
+        
+        finally:
+            # 恢复UI状态
+            self.is_downloading = False
+            self.start_btn.config(state=tk.NORMAL)
+            self.stop_btn.config(state=tk.DISABLED)
     
-    # 必需参数
-    parser.add_argument('url', help='目标网站URL')
+    def check_for_updates(self):
+        """检查更新"""
+        def check_worker():
+            try:
+                logger = setup_logger()
+                result = self.version_manager.check_for_updates()
+                
+                if result.get('error'):
+                    self.log_message(f"检查更新失败: {result['error']}", "WARNING")
+                    return
+                
+                if result.get('has_update'):
+                    latest_version = result['latest_version']
+                    current_version = result['current_version']
+                    release_notes = result['release_notes']
+                    download_url = result['download_url']
+                    
+                    # 在主线程中显示对话框
+                    self.root.after(0, lambda: self.show_update_dialog(
+                        latest_version, current_version, release_notes, download_url
+                    ))
+                else:
+                    self.log_message("当前已是最新版本", "SUCCESS")
+            
+            except Exception as e:
+                self.log_message(f"检查更新时发生错误: {e}", "ERROR")
+        
+        # 在后台线程中检查更新
+        threading.Thread(target=check_worker, daemon=True).start()
     
-    # 基本选项
-    basic_group = parser.add_argument_group('基本选项')
-    basic_group.add_argument(
-        '-o', '--output',
-        default='downloads',
-        help='视频保存目录 (默认: downloads)'
-    )
-    basic_group.add_argument(
-        '-m', '--max-downloads',
-        type=int,
-        default=10,
-        help='最大下载数量 (默认: 10)'
-    )
+    def show_update_dialog(self, latest_version, current_version, release_notes, download_url):
+        """显示更新对话框"""
+        message = f"发现新版本！\n\n"
+        message += f"当前版本: {current_version}\n"
+        message += f"最新版本: {latest_version}\n\n"
+        message += f"更新内容:\n{release_notes[:200]}...\n\n"
+        message += "是否立即下载并更新？"
+        
+        if messagebox.askyesno("发现新版本", message):
+            self.download_and_install_update(download_url)
     
-    # 下载选项
-    download_group = parser.add_argument_group('下载选项')
-    download_group.add_argument(
-        '-w', '--workers',
-        type=int,
-        default=3,
-        help='并发下载线程数 (默认: 3)'
-    )
-    download_group.add_argument(
-        '-r', '--retries',
-        type=int,
-        default=3,
-        help='下载失败重试次数 (默认: 3)'
-    )
-    download_group.add_argument(
-        '--proxy',
-        help='代理服务器地址 (例如: http://127.0.0.1:7890)'
-    )
-    download_group.add_argument(
-        '--resume',
-        action='store_true',
-        help='启用断点续传'
-    )
-    download_group.add_argument(
-        '--no-verify',
-        action='store_true',
-        help='跳过文件完整性验证'
-    )
+    def download_and_install_update(self, download_url):
+        """下载并安装更新"""
+        def update_worker():
+            try:
+                self.log_message("正在下载更新...", "INFO")
+                self.update_status("正在下载更新...", 0)
+                
+                logger = setup_logger()
+                update_file = self.version_manager.download_update(download_url)
+                
+                if update_file:
+                    self.log_message("更新下载完成", "SUCCESS")
+                    
+                    # 询问是否立即安装
+                    self.root.after(0, lambda: self.confirm_install_update(update_file))
+                else:
+                    self.log_message("更新下载失败", "ERROR")
+                    self.root.after(0, lambda: messagebox.showerror("错误", "更新下载失败"))
+            
+            except Exception as e:
+                self.log_message(f"下载更新失败: {e}", "ERROR")
+                self.root.after(0, lambda: messagebox.showerror("错误", f"下载更新失败:\n{e}"))
+        
+        threading.Thread(target=update_worker, daemon=True).start()
     
-    # 高级选项（手动控制）
-    advanced_group = parser.add_argument_group('高级选项（覆盖自动检测）')
-    advanced_group.add_argument(
-        '--force-capture',
-        action='store_true',
-        help='强制使用抓包模式'
-    )
-    advanced_group.add_argument(
-        '--force-hls',
-        action='store_true',
-        help='强制使用HLS下载模式'
-    )
-    advanced_group.add_argument(
-        '--no-merge',
-        action='store_true',
-        help='禁用自动音视频合并'
-    )
-    advanced_group.add_argument(
-        '--wait-time',
-        type=int,
-        default=10,
-        help='抓包模式页面加载等待时间（秒） (默认: 10)'
-    )
-    advanced_group.add_argument(
-        '--keywords',
-        help='搜索关键词（用逗号分隔多个关键词，例如: video,stream,play）'
-    )
-    
-    # 其他选项
-    other_group = parser.add_argument_group('其他选项')
-    other_group.add_argument(
-        '--log-level',
-        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-        default='INFO',
-        help='日志级别 (默认: INFO)'
-    )
-    
-    return parser.parse_args()
+    def confirm_install_update(self, update_file):
+        """确认安装更新"""
+        if messagebox.askyesno("安装更新", "更新已下载完成，是否立即安装？\n程序将会重启。"):
+            try:
+                self.version_manager.install_update(update_file)
+            except Exception as e:
+                messagebox.showerror("错误", f"安装更新失败:\n{e}")
 
 
 def main():
     """主函数"""
-    # 检查依赖
-    if not check_dependencies():
-        sys.exit(1)
-    
-    # 检查可选依赖
-    optional_deps = check_optional_dependencies()
-    
-    # 解析命令行参数
-    args = parse_arguments()
-    
-    # 设置日志
-    import logging
-    log_level = getattr(logging, args.log_level)
-    logger = setup_logger(level=log_level)
-    
-    # 显示配置信息
-    print("=" * 70)
-    print("视频爬虫工具 v3.0 - 智能自动检测模式")
-    print("=" * 70)
-    print(f"目标URL: {args.url}")
-    print(f"保存目录: {args.output}")
-    print(f"最大下载数: {args.max_downloads}")
-    print(f"并发线程数: {args.workers}")
-    if args.proxy:
-        print(f"代理服务器: {args.proxy}")
-    print("=" * 70)
-    print()
-    
-    logger.info("程序启动 - 智能自动检测模式")
-    
     try:
-        # 创建智能检测器
-        detector = SmartDetector(logger=logger)
+        root = tk.Tk()
+        app = VideoDownloaderGUI(root)
         
-        # 初步检测URL类型
-        print("🔍 正在分析URL...")
-        url_type = detector.detect_url_type(args.url)
-        
-        # 获取推荐策略
-        strategy = None
-        html_content = None
-        
-        # 如果是网页，先获取HTML内容进行更详细的分析
-        if url_type == 'webpage' and not args.force_hls and not args.force_capture:
-            print("📄 获取网页内容进行分析...")
-            html_content = get_html_content(args.url, args.proxy, logger)
-            if html_content:
-                strategy = detector.recommend_strategy(args.url, html_content)
+        # 设置窗口图标（如果有的话）
+        try:
+            if hasattr(sys, '_MEIPASS'):
+                # PyInstaller打包后的路径
+                icon_path = os.path.join(getattr(sys, '_MEIPASS'), 'icon.ico')
             else:
-                print("⚠️  无法获取网页内容，将尝试抓包模式")
-                strategy = {'method': 'capture_and_analyze', 'use_capture': True, 'use_merge': True}
-        else:
-            strategy = detector.recommend_strategy(args.url)
-        
-        # 应用手动覆盖
-        if args.force_capture:
-            strategy['use_capture'] = True
-            strategy['method'] = 'capture_and_analyze'
-            print("🔧 手动启用抓包模式")
-        
-        if args.force_hls:
-            strategy['use_hls'] = True
-            strategy['method'] = 'hls_download'
-            print("🔧 手动启用HLS下载模式")
-        
-        if args.no_merge:
-            strategy['use_merge'] = False
-            print("🔧 已禁用自动音视频合并")
-        else:
-            strategy['use_merge'] = strategy.get('use_merge', False)
-        
-        # 显示检测结果和策略
-        print(f"\n✅ 检测完成")
-        print(f"   URL类型: {url_type}")
-        print(f"   推荐策略: {strategy['method']}")
-        print()
-        
-        # 根据策略执行下载
-        video_links = []
-        captured_cookies = None
-        captured_referer = None
-        
-        # 策略1: HLS流下载
-        if strategy['method'] == 'hls_download':
-            print("📺 HLS流下载模式")
-            print("-" * 70)
-            stream_downloader = StreamDownloader(output_dir=args.output, logger=logger)
-            output_file = stream_downloader.download_hls(args.url, "video.mp4")
+                icon_path = 'icon.ico'
             
-            if output_file:
-                print(f"\n✅ 下载完成: {output_file}")
+            if os.path.exists(icon_path):
+                root.iconbitmap(icon_path)
+        except:
+            pass
+        
+        # 设置窗口关闭事件
+        def on_closing():
+            if app.is_downloading:
+                if messagebox.askokcancel("退出", "正在下载中，确定要退出吗？"):
+                    app.is_downloading = False
+                    root.destroy()
             else:
-                print("\n❌ 下载失败")
-            return
+                root.destroy()
         
-        # 策略2: 直接下载视频文件
-        elif strategy['method'] == 'direct_download':
-            print("📥 直接下载模式")
-            print("-" * 70)
-            video_links = [args.url]
+        root.protocol("WM_DELETE_WINDOW", on_closing)
         
-        # 策略3: 抓包分析
-        elif strategy['method'] == 'capture_and_analyze':
-            if not optional_deps['selenium']:
-                print("⚠️  抓包模式需要selenium，但未安装")
-                print("   尝试使用HTML解析模式...")
-                strategy['method'] = 'html_parse'
-            else:
-                print("🌐 网络抓包模式")
-                print("-" * 70)
-                print(f"   正在启动浏览器并分析网络请求...")
-                print(f"   等待时间: {args.wait_time}秒")
-                print()
-                
-                capture = NetworkCapture(headless=True, logger=logger)
-                requests_list = capture.start_capture(args.url, wait_time=args.wait_time)
-                
-                # 获取Cookie和Referer
-                captured_cookies = capture.get_cookies()
-                captured_referer = capture.get_referer()
-                
-                if captured_cookies:
-                    print(f"   ✅ 获取到 {len(captured_cookies)} 个Cookie")
-                if captured_referer:
-                    print(f"   ✅ 获取到Referer: {captured_referer[:50]}...")
-                
-                if requests_list:
-                    # 解析关键词
-                    keywords = None
-                    if args.keywords:
-                        keywords = [k.strip() for k in args.keywords.split(',')]
-                        print(f"   🔍 使用关键词搜索: {', '.join(keywords)}")
-                    
-                    # 获取所有视频候选URL（使用增强的搜索）
-                    print(f"\n📊 智能分析视频URL...")
-                    candidates = capture.get_all_video_candidates(keywords=keywords)
-                    
-                    # 显示分析结果
-                    print(f"   高置信度: {len(candidates['high_confidence'])} 个")
-                    print(f"   中等置信度: {len(candidates['medium_confidence'])} 个")
-                    if keywords:
-                        print(f"   关键词匹配: {len(candidates['keyword_matches'])} 个")
-                    
-                    # 过滤视频请求
-                    video_requests = capture.filter_video_requests(requests_list, keywords=keywords)
-                    
-                    if video_requests:
-                        # 优先使用候选URL
-                        print(f"\n🎯 选择最佳视频URL...")
-                        
-                        # 收集所有高质量的视频链接
-                        priority_links = []
-                        priority_links.extend(candidates['high_confidence'])
-                        if keywords:
-                            priority_links.extend(candidates['keyword_matches'])
-                        priority_links.extend(candidates['medium_confidence'])
-                        
-                        # 去重
-                        priority_links = list(dict.fromkeys(priority_links))
-                        
-                        if priority_links:
-                            print(f"   找到 {len(priority_links)} 个优质视频URL")
-                            video_links.extend(priority_links[:args.max_downloads])
-                        
-                        # 提取流媒体URL
-                        streams = capture.extract_stream_urls(video_requests)
-                        
-                        print(f"\n📊 流媒体分析:")
-                        print(f"   HLS流: {len(streams['hls'])} 个")
-                        print(f"   DASH流: {len(streams['dash'])} 个")
-                        print(f"   直接视频: {len(streams['direct'])} 个")
-                        print(f"   视频片段: {len(streams['segments'])} 个")
-                        
-                        # 处理HLS流
-                        if streams['hls'] and not video_links:
-                            print(f"\n🎬 发现HLS流，开始下载...")
-                            stream_downloader = StreamDownloader(output_dir=args.output, logger=logger)
-                            output_file = stream_downloader.download_hls(streams['hls'][0], "hls_video.mp4")
-                            if output_file:
-                                print(f"✅ HLS流下载完成: {output_file}")
-                        
-                        # 如果还没有找到视频链接，使用直接链接
-                        if not video_links and streams['direct']:
-                            video_links.extend(streams['direct'])
-                        
-                        # 检测分离的音视频流
-                        if strategy.get('use_merge', False):
-                            separate_result = detector.detect_separate_streams(video_requests)
-                            
-                            if separate_result['has_separate']:
-                                print(f"\n🎵 检测到分离的音视频流")
-                                print(f"   视频流: {len(separate_result['video_urls'])} 个")
-                                print(f"   音频流: {len(separate_result['audio_urls'])} 个")
-                                
-                                # 检查FFmpeg
-                                merger = MediaMerger(logger=logger)
-                                if merger.is_available():
-                                    print(f"\n🔧 开始下载并合并音视频...")
-                                    stream_downloader = StreamDownloader(output_dir=args.output, logger=logger)
-                                    
-                                    # 选择最佳质量的视频和音频
-                                    video_url = separate_result['video_urls'][0]
-                                    audio_url = separate_result['audio_urls'][0]
-                                    
-                                    output_file = stream_downloader.download_separate_streams(
-                                        video_url, audio_url, "merged_video.mp4", merger
-                                    )
-                                    
-                                    if output_file:
-                                        print(f"✅ 音视频合并完成: {output_file}")
-                                    else:
-                                        print("❌ 音视频合并失败")
-                                else:
-                                    print("⚠️  未找到FFmpeg，无法合并音视频")
-                                    print("   提示: 安装FFmpeg以启用音视频合并功能")
-                    else:
-                        print("⚠️  未找到视频相关请求，尝试HTML解析...")
-                        strategy['method'] = 'html_parse'
-                else:
-                    print("⚠️  未捕获到网络请求，尝试HTML解析...")
-                    strategy['method'] = 'html_parse'
-        
-        # 策略4: HTML解析（默认/回退）
-        if strategy['method'] == 'html_parse':
-            print("📝 HTML解析模式")
-            print("-" * 70)
-            
-            if not html_content:
-                html_content = get_html_content(args.url, args.proxy, logger)
-            
-            if html_content:
-                parser = VideoParser(logger=logger)
-                video_links = parser.parse(html_content, args.url)
-            else:
-                print("❌ 无法获取网页内容")
-                logger.error("无法获取网页内容，程序退出")
-                sys.exit(1)
-        
-        # 下载视频链接
-        if video_links:
-            print(f"\n📹 共找到 {len(video_links)} 个视频文件")
-            
-            # 显示视频链接列表
-            print("\n视频链接列表:")
-            for i, link in enumerate(video_links[:args.max_downloads], 1):
-                print(f"  {i}. {link}")
-            
-            # 限制下载数量
-            if len(video_links) > args.max_downloads:
-                print(f"\n将下载前 {args.max_downloads} 个视频文件")
-                video_links = video_links[:args.max_downloads]
-            
-            # 创建下载器（使用捕获的Cookie和Referer）
-            downloader = VideoDownloader(
-                output_dir=args.output,
-                workers=args.workers,
-                retries=args.retries,
-                proxy=args.proxy,
-                resume=args.resume,
-                verify=not args.no_verify,
-                logger=logger,
-                cookies=captured_cookies,
-                referer=captured_referer
-            )
-            
-            # 开始下载
-            print(f"\n⬇️  开始下载视频文件...")
-            print()
-            
-            results = downloader.download_videos(video_links)
-            
-            # 显示下载结果
-            print("\n" + "=" * 70)
-            print("✅ 下载完成！")
-            print("=" * 70)
-            print(f"成功: {results['success']} 个")
-            print(f"失败: {results['failed']} 个")
-            print(f"跳过: {results['skipped']} 个")
-            print(f"总计: {len(video_links)} 个")
-            print("=" * 70)
-            
-            logger.info(f"下载完成 - 成功: {results['success']}, 失败: {results['failed']}, 跳过: {results['skipped']}")
-            
-            # 处理加密视频文件
-            if results['success'] > 0:
-                print(f"\n🔓 检查并处理加密视频...")
-                crypto_handler = EncryptedVideoHandler(logger=logger)
-                processed = crypto_handler.batch_process_directory(args.output)
-                
-                if processed:
-                    print(f"✅ 成功解密 {len(processed)} 个加密视频")
-                    for file in processed:
-                        print(f"   - {os.path.basename(file)}")
-        else:
-            print("\n⚠️  未找到可下载的视频")
-        
-        logger.info("程序结束")
-    
-    except KeyboardInterrupt:
-        print("\n\n⚠️  用户中断下载")
-        logger.warning("用户中断下载")
-        sys.exit(0)
+        # 启动主循环
+        root.mainloop()
     
     except Exception as e:
-        print(f"\n❌ 程序异常: {e}")
-        logger.error(f"程序异常: {e}", exc_info=True)
-        sys.exit(1)
+        print(f"GUI启动失败: {e}")
+        print("正在启动Web界面作为备用方案...")
+        
+        # 显示错误对话框（如果可能）
+        try:
+            messagebox.showerror(
+                "启动失败",
+                f"GUI界面启动失败:\n{e}\n\n正在启动Web界面..."
+            )
+        except:
+            pass
+        
+        # 启动Web界面
+        try:
+            # 启动API服务器
+            subprocess.Popen([sys.executable, "api_server.py"],
+                           creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == 'win32' else 0)
+            
+            # 等待服务器启动
+            import time
+            time.sleep(2)
+            
+            # 打开浏览器
+            webbrowser.open("http://localhost:5000")
+            print("Web界面已启动: http://localhost:5000")
+        except Exception as web_error:
+            print(f"启动Web界面失败: {web_error}")
+            print("请手动运行: python api_server.py")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
